@@ -1,0 +1,7 @@
+category,input,target_unit
+weight,1000mg,g
+volume,1 gallon,ml
+potency,22.4%,mg/g
+convert,8 fl oz,cup
+total_units,2 x 12,units
+total_quantity,24 * 100,mg

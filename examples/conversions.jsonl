@@ -1,0 +1,6 @@
+{"category":"weight","input":"1000mg","target_unit":"g"}
+{"category":"volume","input":"1 gallon","target_unit":"ml"}
+{"category":"potency","input":"22.4%","target_unit":"mg/g"}
+{"category":"convert","input":"8 fl oz","target_unit":"cup"}
+{"category":"total_units","input":"2 x 12","target_unit":"units"}
+{"category":"total_quantity","input":"24 * 100","target_unit":"mg"}
