@@ -2,7 +2,7 @@
 
 UnitMath is a small Rust library and dependency-free CLI for unit conversions, parsing, and package math.
 
-Version 1.0.0 is a stable MVP focused on:
+Version 1.3.0 is focused on:
 
 - Weight conversions
 - US liquid volume conversions
@@ -11,8 +11,11 @@ Version 1.0.0 is a stable MVP focused on:
 - Basic string parsing for weight, volume, and potency quantities
 - Parsed conversion helpers
 - A minimal CLI
+- Optional JSON CLI output
+- Optional CSV CLI output
+- Universal CLI conversion with category inference
 
-UnitMath intentionally does not include universal conversion, package parsing, JSON output, or trait-based quantity abstractions yet.
+UnitMath intentionally does not include universal library conversion, package parsing, or trait-based quantity abstractions yet.
 
 ## Supported Units
 
@@ -135,6 +138,8 @@ Package helpers only multiply counts by per-unit quantities. They do not parse p
 
 ## CLI Usage
 
+Default CLI output is numeric-only:
+
 ```sh
 unitmath weight "1000mg" g
 unitmath weight "1 lb" oz
@@ -142,9 +147,45 @@ unitmath volume "8 fl oz" cup
 unitmath volume "1 gallon" ml
 unitmath potency "22.4%" mg/g
 unitmath potency "224mg/g" percent
+unitmath convert "3.5g" oz
+unitmath convert "1 gallon" ml
+unitmath convert "22.4%" mg/g
 ```
 
-Each command prints only the numeric converted value on success. Errors are written to stderr with usage guidance.
+Add `--json` at the end to emit structured output:
+
+```sh
+unitmath weight "3.5g" oz --json
+unitmath volume "8 fl oz" cup --json
+unitmath potency "22.4%" mg/g --json
+unitmath convert "3.5g" oz --json
+```
+
+Example JSON output:
+
+```json
+{"category":"weight","input":"3.5g","target_unit":"oz","value":0.12345886682353144}
+```
+
+Add `--csv` at the end to emit a header row and one data row:
+
+```sh
+unitmath weight "3.5g" oz --csv
+unitmath volume "8 fl oz" cup --csv
+unitmath potency "22.4%" mg/g --csv
+unitmath convert "3.5g" oz --csv
+```
+
+Example CSV output:
+
+```csv
+category,input,target_unit,value
+weight,3.5g,oz,0.12345886682353144
+```
+
+Errors are written to stderr with usage guidance.
+
+The `convert` command infers the category from the input and target unit. It succeeds only when exactly one category matches.
 
 ## Examples
 
@@ -159,5 +200,4 @@ cargo run --example basic_potency
 - Additional parsers
 - Package parsing
 - More unit families
-- Optional structured output modes
 - Broader CLI ergonomics
