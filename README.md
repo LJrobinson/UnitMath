@@ -2,7 +2,7 @@
 
 UnitMath is a small Rust library and dependency-free CLI for unit conversions, parsing, and package math.
 
-Version 1.3.0 is focused on:
+Version 1.4.0 is focused on:
 
 - Weight conversions
 - US liquid volume conversions
@@ -14,6 +14,7 @@ Version 1.3.0 is focused on:
 - Optional JSON CLI output
 - Optional CSV CLI output
 - Universal CLI conversion with category inference
+- Batch CSV input mode with CSV or JSON Lines output
 
 UnitMath intentionally does not include universal library conversion, package parsing, or trait-based quantity abstractions yet.
 
@@ -186,6 +187,44 @@ weight,3.5g,oz,0.12345886682353144
 Errors are written to stderr with usage guidance.
 
 The `convert` command infers the category from the input and target unit. It succeeds only when exactly one category matches.
+
+## Batch Mode
+
+Batch mode reads a CSV file with these headers:
+
+```csv
+category,input,target_unit
+weight,1000mg,g
+volume,1 gallon,ml
+potency,22.4%,mg/g
+convert,8 fl oz,cup
+```
+
+Supported batch categories are `weight`, `volume`, `potency`, and `convert`. Surrounding whitespace in header names and category values is ignored.
+
+Batch mode requires an explicit output format:
+
+```sh
+unitmath batch conversions.csv --csv
+unitmath batch conversions.csv --json
+```
+
+CSV batch output includes one result row per input row:
+
+```csv
+category,input,target_unit,value,status,error
+weight,1000mg,g,1,ok,
+volume,1 gallon,ml,3785.411784,ok,
+```
+
+JSON batch output is JSON Lines:
+
+```jsonl
+{"category":"weight","input":"1000mg","target_unit":"g","value":1,"status":"ok","error":null}
+{"category":"volume","input":"1 gallon","target_unit":"ml","value":3785.411784,"status":"ok","error":null}
+```
+
+Rows with errors are included in the output with `status` set to `error`; batch processing continues after row-level failures.
 
 ## Examples
 

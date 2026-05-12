@@ -1,4 +1,4 @@
-use std::{env, fmt::Write, process};
+use std::{env, fmt::Write, fs, process};
 
 use unitmath::{
     convert_parsed_potency, convert_parsed_volume, convert_parsed_weight, PotencyUnit,
@@ -23,6 +23,7 @@ struct CliOutput {
     target_unit: String,
     value: f64,
     format: OutputFormat,
+    rendered_output: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +35,10 @@ enum OutputFormat {
 
 impl CliOutput {
     fn render(&self) -> String {
+        if let Some(output) = &self.rendered_output {
+            return output.clone();
+        }
+
         match self.format {
             OutputFormat::Plain => self.value.to_string(),
             OutputFormat::Json => format!(
@@ -55,6 +60,10 @@ impl CliOutput {
 }
 
 fn run(args: &[String]) -> Result<CliOutput, String> {
+    if args.first().map(String::as_str) == Some("batch") {
+        return run_batch_command(args);
+    }
+
     if args.len() < 3 {
         return Err("missing arguments".to_string());
     }
@@ -127,7 +136,271 @@ fn run(args: &[String]) -> Result<CliOutput, String> {
         target_unit: target.trim().to_string(),
         value,
         format,
+        rendered_output: None,
     })
+}
+
+#[derive(Debug, PartialEq)]
+struct BatchRow {
+    category: String,
+    input: String,
+    target_unit: String,
+}
+
+#[derive(Debug, PartialEq)]
+struct BatchResult {
+    category: String,
+    input: String,
+    target_unit: String,
+    value: Option<f64>,
+    status: String,
+    error: Option<String>,
+}
+
+fn run_batch_command(args: &[String]) -> Result<CliOutput, String> {
+    if args.len() < 3 {
+        return Err("batch mode requires an input file and --csv or --json".to_string());
+    }
+
+    let has_json = args.iter().any(|argument| argument == "--json");
+    let has_csv = args.iter().any(|argument| argument == "--csv");
+
+    if has_json && has_csv {
+        return Err("--json and --csv cannot be used together".to_string());
+    }
+
+    let format = match args.last().map(String::as_str) {
+        Some("--json") => OutputFormat::Json,
+        Some("--csv") => OutputFormat::Csv,
+        _ => return Err("batch mode requires --csv or --json".to_string()),
+    };
+
+    if args[..args.len() - 1]
+        .iter()
+        .any(|argument| argument == "--json" || argument == "--csv")
+    {
+        return Err("batch output format flag must appear at the end".to_string());
+    }
+
+    if args.len() != 3 {
+        return Err("batch mode expects: unitmath batch <input.csv> --csv|--json".to_string());
+    }
+
+    let input_path = &args[1];
+    let contents = fs::read_to_string(input_path)
+        .map_err(|error| format!("failed to read batch input file '{input_path}': {error}"))?;
+    let rows = parse_batch_rows(&contents)?;
+    let results = rows
+        .iter()
+        .map(process_batch_row)
+        .collect::<Vec<BatchResult>>();
+    let rendered_output = match format {
+        OutputFormat::Csv => render_batch_csv(&results),
+        OutputFormat::Json => render_batch_json_lines(&results),
+        OutputFormat::Plain => unreachable!("batch format is validated above"),
+    };
+
+    Ok(CliOutput {
+        category: "batch".to_string(),
+        input: input_path.to_string(),
+        target_unit: String::new(),
+        value: 0.0,
+        format,
+        rendered_output: Some(rendered_output),
+    })
+}
+
+fn parse_batch_rows(contents: &str) -> Result<Vec<BatchRow>, String> {
+    let rows = parse_csv_rows(contents)?;
+    let Some(header) = rows.first() else {
+        return Err("batch input CSV is empty".to_string());
+    };
+
+    let header_names = header
+        .iter()
+        .map(|field| field.trim().to_ascii_lowercase())
+        .collect::<Vec<String>>();
+
+    if header_names != ["category", "input", "target_unit"] {
+        return Err("batch input CSV must have headers: category,input,target_unit".to_string());
+    }
+
+    rows.iter()
+        .skip(1)
+        .enumerate()
+        .map(|(index, row)| {
+            if row.len() != 3 {
+                return Err(format!(
+                    "batch input row {} must have exactly 3 fields",
+                    index + 2
+                ));
+            }
+
+            Ok(BatchRow {
+                category: row[0].trim().to_ascii_lowercase(),
+                input: row[1].clone(),
+                target_unit: row[2].clone(),
+            })
+        })
+        .collect()
+}
+
+fn parse_csv_rows(contents: &str) -> Result<Vec<Vec<String>>, String> {
+    let mut rows = Vec::new();
+    let mut row = Vec::new();
+    let mut field = String::new();
+    let mut chars = contents.chars().peekable();
+    let mut in_quotes = false;
+
+    while let Some(character) = chars.next() {
+        match character {
+            '"' if in_quotes && chars.peek() == Some(&'"') => {
+                field.push('"');
+                chars.next();
+            }
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => {
+                row.push(field);
+                field = String::new();
+            }
+            '\n' if !in_quotes => {
+                row.push(field);
+                field = String::new();
+                rows.push(row);
+                row = Vec::new();
+            }
+            '\r' if !in_quotes => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                row.push(field);
+                field = String::new();
+                rows.push(row);
+                row = Vec::new();
+            }
+            character => field.push(character),
+        }
+    }
+
+    if in_quotes {
+        return Err("unterminated quoted field in batch input CSV".to_string());
+    }
+
+    if !field.is_empty() || !row.is_empty() {
+        row.push(field);
+        rows.push(row);
+    }
+
+    Ok(rows
+        .into_iter()
+        .filter(|row| row.iter().any(|field| !field.trim().is_empty()))
+        .collect())
+}
+
+fn process_batch_row(row: &BatchRow) -> BatchResult {
+    match convert_row(&row.category, &row.input, &row.target_unit) {
+        Ok((category, value)) => BatchResult {
+            category,
+            input: row.input.clone(),
+            target_unit: row.target_unit.trim().to_string(),
+            value: Some(value),
+            status: "ok".to_string(),
+            error: None,
+        },
+        Err(error) => BatchResult {
+            category: row.category.clone(),
+            input: row.input.clone(),
+            target_unit: row.target_unit.trim().to_string(),
+            value: None,
+            status: "error".to_string(),
+            error: Some(error),
+        },
+    }
+}
+
+fn convert_row(category: &str, input: &str, target: &str) -> Result<(String, f64), String> {
+    match category {
+        "weight" => {
+            let unit = parse_target_weight_unit(target)
+                .ok_or_else(|| format!("unknown weight target unit: {target}"))?;
+            let value = convert_parsed_weight(input, unit)
+                .map_err(|error| parse_error_message("weight", error))?;
+
+            Ok(("weight".to_string(), value))
+        }
+        "volume" => {
+            let unit = parse_target_volume_unit(target)
+                .ok_or_else(|| format!("unknown volume target unit: {target}"))?;
+            let value = convert_parsed_volume(input, unit)
+                .map_err(|error| parse_error_message("volume", error))?;
+
+            Ok(("volume".to_string(), value))
+        }
+        "potency" => {
+            let unit = parse_target_potency_unit(target)
+                .ok_or_else(|| format!("unknown potency target unit: {target}"))?;
+            let value = convert_parsed_potency(input, unit)
+                .map_err(|error| parse_error_message("potency", error))?;
+
+            Ok(("potency".to_string(), value))
+        }
+        "convert" => infer_conversion(input, target),
+        _ => Err(format!("unknown batch category: {category}")),
+    }
+}
+
+fn render_batch_csv(results: &[BatchResult]) -> String {
+    let mut output = String::from("category,input,target_unit,value,status,error");
+
+    for result in results {
+        output.push('\n');
+        let value = result
+            .value
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        let error = result.error.as_deref().unwrap_or("");
+
+        write!(
+            &mut output,
+            "{},{},{},{},{},{}",
+            escape_csv_field(&result.category),
+            escape_csv_field(&result.input),
+            escape_csv_field(&result.target_unit),
+            value,
+            result.status,
+            escape_csv_field(error)
+        )
+        .unwrap();
+    }
+
+    output
+}
+
+fn render_batch_json_lines(results: &[BatchResult]) -> String {
+    results
+        .iter()
+        .map(|result| {
+            let value = result
+                .value
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "null".to_string());
+            let error = result.error.as_ref().map_or_else(
+                || "null".to_string(),
+                |error| format!(r#""{}""#, escape_json_string(error)),
+            );
+
+            format!(
+                r#"{{"category":"{}","input":"{}","target_unit":"{}","value":{},"status":"{}","error":{}}}"#,
+                escape_json_string(&result.category),
+                escape_json_string(&result.input),
+                escape_json_string(&result.target_unit),
+                value,
+                escape_json_string(&result.status),
+                error
+            )
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
 }
 
 fn infer_conversion(input: &str, target: &str) -> Result<(String, f64), String> {
@@ -245,6 +518,8 @@ fn usage() -> &'static str {
   unitmath volume "<input>" <target-unit> --csv
   unitmath potency "<input>" <target-unit> --csv
   unitmath convert "<input>" <target-unit> --csv
+  unitmath batch <input.csv> --csv
+  unitmath batch <input.csv> --json
 
 Target units:
   weight: mg, g, kg, oz, lb
@@ -255,6 +530,14 @@ Target units:
 #[cfg(test)]
 mod tests {
     use super::{escape_csv_field, escape_json_string, run, CliOutput, OutputFormat};
+    use std::{
+        env, fs,
+        path::PathBuf,
+        process,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    static TEMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     fn assert_approx_eq(actual: f64, expected: f64, epsilon: f64) {
         let difference = (actual - expected).abs();
@@ -266,6 +549,18 @@ mod tests {
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()
+    }
+
+    fn write_temp_csv(contents: &str) -> PathBuf {
+        let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path = env::temp_dir().join(format!(
+            "unitmath-batch-test-{}-{counter}.csv",
+            process::id()
+        ));
+
+        fs::write(&path, contents).unwrap();
+
+        path
     }
 
     #[test]
@@ -341,6 +636,7 @@ mod tests {
             target_unit: "oz".to_string(),
             value: 1.0,
             format: OutputFormat::Json,
+            rendered_output: None,
         };
 
         assert_eq!(
@@ -403,6 +699,7 @@ mod tests {
             target_unit: "oz".to_string(),
             value: 1.0,
             format: OutputFormat::Csv,
+            rendered_output: None,
         };
 
         assert_eq!(
@@ -419,6 +716,7 @@ mod tests {
             target_unit: "oz".to_string(),
             value: 1.0,
             format: OutputFormat::Csv,
+            rendered_output: None,
         };
 
         assert_eq!(
@@ -493,6 +791,92 @@ mod tests {
     #[test]
     fn rejects_universal_missing_arguments() {
         assert!(run(&args(&["convert", "1000mg"])).is_err());
+    }
+
+    #[test]
+    fn renders_batch_csv_output() {
+        let path = write_temp_csv(
+            "category,input,target_unit\nweight,1000mg,g\nvolume,1 gallon,ml\npotency,22.4%,mg/g\nconvert,8 fl oz,cup\n",
+        );
+        let output = run(&args(&["batch", path.to_str().unwrap(), "--csv"]))
+            .unwrap()
+            .render();
+
+        fs::remove_file(path).unwrap();
+
+        assert_eq!(
+            output,
+            "category,input,target_unit,value,status,error\nweight,1000mg,g,1,ok,\nvolume,1 gallon,ml,3785.411784,ok,\npotency,22.4%,mg/g,224,ok,\nvolume,8 fl oz,cup,1,ok,"
+        );
+    }
+
+    #[test]
+    fn renders_batch_json_lines_output() {
+        let path = write_temp_csv(
+            "category,input,target_unit\nweight,1000mg,g\nvolume,1 gallon,ml\npotency,22.4%,mg/g\nconvert,8 fl oz,cup\n",
+        );
+        let output = run(&args(&["batch", path.to_str().unwrap(), "--json"]))
+            .unwrap()
+            .render();
+
+        fs::remove_file(path).unwrap();
+
+        assert_eq!(
+            output,
+            concat!(
+                r#"{"category":"weight","input":"1000mg","target_unit":"g","value":1,"status":"ok","error":null}"#,
+                "\n",
+                r#"{"category":"volume","input":"1 gallon","target_unit":"ml","value":3785.411784,"status":"ok","error":null}"#,
+                "\n",
+                r#"{"category":"potency","input":"22.4%","target_unit":"mg/g","value":224,"status":"ok","error":null}"#,
+                "\n",
+                r#"{"category":"volume","input":"8 fl oz","target_unit":"cup","value":1,"status":"ok","error":null}"#
+            )
+        );
+    }
+
+    #[test]
+    fn renders_batch_row_level_errors() {
+        let path = write_temp_csv(
+            "category,input,target_unit\nweight,10 bananas,g\nvolume,1000ml,bucket\nconvert,abc,g\n",
+        );
+        let output = run(&args(&["batch", path.to_str().unwrap(), "--csv"]))
+            .unwrap()
+            .render();
+
+        fs::remove_file(path).unwrap();
+
+        assert!(output
+            .contains("weight,10 bananas,g,,error,failed to parse weight input: unknown unit"));
+        assert!(output.contains("volume,1000ml,bucket,,error,unknown volume target unit: bucket"));
+        assert!(output.contains("convert,abc,g,,error,could not infer conversion category"));
+    }
+
+    #[test]
+    fn rejects_batch_missing_output_format() {
+        assert!(run(&args(&["batch", "input.csv"])).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_batch_file_path() {
+        assert!(run(&args(&[
+            "batch",
+            "missing-unitmath-batch-file.csv",
+            "--csv"
+        ]))
+        .is_err());
+    }
+
+    #[test]
+    fn parses_quoted_batch_field_containing_comma() {
+        let path = write_temp_csv("category,input,target_unit\nweight,\"10, bananas\",g\n");
+        let output = run(&args(&["batch", path.to_str().unwrap(), "--csv"]))
+            .unwrap()
+            .render();
+
+        fs::remove_file(path).unwrap();
+
+        assert!(output.contains("weight,\"10, bananas\",g,,error"));
     }
 
     #[test]
