@@ -1,6 +1,11 @@
 [package]
 name = "unitmath"
-version = "0.8.0"
+version = "1.0.0"
 edition = "2021"
+description = "A small Rust library and CLI for unit conversions, parsing, and package math."
+license = "MIT"
+repository = "https://github.com/LJrobinson/UnitMath"
+keywords = ["units", "conversion", "measurement", "parsing", "cli"]
+categories = ["command-line-utilities", "parser-implementations", "science", "mathematics"]
 
 [dependencies]

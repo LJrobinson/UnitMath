@@ -1,3 +1,5 @@
+use std::{error::Error, fmt};
+
 /// Errors returned by UnitMath parsing helpers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnitMathError {
@@ -12,3 +14,19 @@ pub enum UnitMathError {
     /// The unit string is not supported.
     UnknownUnit,
 }
+
+impl fmt::Display for UnitMathError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::EmptyInput => "input is empty",
+            Self::MissingNumber => "missing numeric value",
+            Self::InvalidNumber => "invalid numeric value",
+            Self::MissingUnit => "missing unit",
+            Self::UnknownUnit => "unknown unit",
+        };
+
+        formatter.write_str(message)
+    }
+}
+
+impl Error for UnitMathError {}

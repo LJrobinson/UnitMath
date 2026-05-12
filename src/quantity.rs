@@ -235,6 +235,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_uppercase_weight_units() {
+        assert_parsed_weight("3.5G", 3.5, WeightUnit::Gram);
+    }
+
+    #[test]
+    fn parses_weight_with_extra_whitespace() {
+        assert_parsed_weight("  1000 mg  ", 1000.0, WeightUnit::Milligram);
+    }
+
+    #[test]
+    fn parses_weight_decimal_without_leading_zero() {
+        assert_parsed_weight(".5 g", 0.5, WeightUnit::Gram);
+    }
+
+    #[test]
     fn rejects_empty_input() {
         assert_eq!(parse_weight("").unwrap_err(), UnitMathError::EmptyInput);
     }
@@ -301,6 +316,11 @@ mod tests {
     }
 
     #[test]
+    fn parses_uppercase_volume_units() {
+        assert_parsed_volume("8 FL OZ", 8.0, VolumeUnit::FluidOunce);
+    }
+
+    #[test]
     fn rejects_empty_volume_input() {
         assert_eq!(parse_volume("").unwrap_err(), UnitMathError::EmptyInput);
     }
@@ -363,6 +383,11 @@ mod tests {
             224.0,
             PotencyUnit::MilligramsPerGram,
         );
+    }
+
+    #[test]
+    fn parses_uppercase_potency_units() {
+        assert_parsed_potency("224 MG/G", 224.0, PotencyUnit::MilligramsPerGram);
     }
 
     #[test]
